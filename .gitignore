@@ -1,0 +1,7 @@
+service_account.json
+tinanz_*_products.csv
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
