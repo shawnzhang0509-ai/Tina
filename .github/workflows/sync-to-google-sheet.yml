@@ -1,0 +1,58 @@
+# 定时从 tinanz 抓取并写入 Google Sheet（Products 工作表）
+# 需在仓库 Settings → Secrets and variables → Actions 中配置：
+#   GOOGLE_SERVICE_ACCOUNT_JSON  服务账号 JSON 全文（单行粘贴）
+#   GOOGLE_SHEET_ID              表格 ID（URL 中 /d/ 与 /edit 之间那段）
+#
+# 可选变量（Repository variables）：
+#   TINANZ_CATEGORY   分类 ID，默认 1026
+#   SYNC_START_ID     起始商品 id，默认 9
+
+name: Sync TinaNZ to Google Sheet
+
+on:
+  schedule:
+    # 每天 UTC 02:00（可按需改 cron）
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write service account credentials
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          python3 << 'PY'
+          import json, os, sys
+          raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+          if not raw:
+              print("Missing secret GOOGLE_SERVICE_ACCOUNT_JSON", file=sys.stderr)
+              sys.exit(1)
+          # Allow pasted JSON with optional outer quotes
+          if (raw.startswith("'") and raw.endswith("'")) or (raw.startswith('"') and raw.endswith('"')):
+              raw = raw[1:-1]
+          data = json.loads(raw)
+          with open("service_account.json", "w", encoding="utf-8") as f:
+              json.dump(data, f)
+          PY
+
+      - name: Run sync to sheet
+        env:
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          TINANZ_CATEGORY: ${{ vars.TINANZ_CATEGORY }}
+          SYNC_START_ID: ${{ vars.SYNC_START_ID }}
+        run: |
+          CATEGORY="${TINANZ_CATEGORY:-1026}"
+          START_ID="${SYNC_START_ID:-9}"
+          python3 sync.py --output sheet --category "$CATEGORY" --sheet-id "$GOOGLE_SHEET_ID" --creds service_account.json --start-id "$START_ID"

@@ -11,11 +11,13 @@ Tina家 (tinanz.com) → nzbaobao.com 自动同步脚本
 使用方法：
   python sync.py --category 1026 --output csv
   python sync.py --category 1026 --output sheet --sheet-id YOUR_SHEET_ID
+  # 或设置环境变量 GOOGLE_SHEET_ID、GOOGLE_SERVICE_ACCOUNT_JSON（CI/定时任务）
 """
 
 import argparse
 import csv
 import json
+import os
 import re
 import sys
 import time
@@ -211,17 +213,36 @@ def export_csv(rows: List[List], filename: str):
     print(f"\nCSV 已导出: {filename}")
 
 
-def update_google_sheet(rows: List[List], sheet_id: str, creds_file: str):
-    """使用 gspread 更新 Google Sheet（需提前配置 Service Account）"""
+def _load_sheet_credentials(creds_file: str):
+    """从文件或环境变量 GOOGLE_SERVICE_ACCOUNT_JSON 加载凭证"""
     try:
-        import gspread
         from google.oauth2.service_account import Credentials
     except ImportError:
-        print("请先安装 gspread: pip install gspread")
-        return
+        return None
 
     scopes = ['https://www.googleapis.com/auth/spreadsheets']
-    creds = Credentials.from_service_account_file(creds_file, scopes=scopes)
+    raw = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON', '').strip()
+    if raw:
+        if (raw.startswith("'") and raw.endswith("'")) or (raw.startswith('"') and raw.endswith('"')):
+            raw = raw[1:-1]
+        info = json.loads(raw)
+        return Credentials.from_service_account_info(info, scopes=scopes)
+    return Credentials.from_service_account_file(creds_file, scopes=scopes)
+
+
+def update_google_sheet(rows: List[List], sheet_id: str, creds_file: str):
+    """使用 gspread 更新 Google Sheet（需 Service Account 文件或 GOOGLE_SERVICE_ACCOUNT_JSON）"""
+    try:
+        import gspread
+    except ImportError:
+        print("请先安装: pip install gspread google-auth")
+        return
+
+    creds = _load_sheet_credentials(creds_file)
+    if creds is None:
+        print("请先安装: pip install google-auth")
+        return
+
     client = gspread.authorize(creds)
 
     spreadsheet = client.open_by_key(sheet_id)
@@ -230,21 +251,26 @@ def update_google_sheet(rows: List[List], sheet_id: str, creds_file: str):
     # 清空旧数据（保留表头）
     last_row = sheet.row_count
     if last_row > 1:
-        sheet.batch_clear([f"A2:I{last_row}"])
+        sheet.batch_clear([f'A2:I{last_row}'])
 
-    # 写入新数据
+    # 写入新数据（gspread: values 在前，range_name 在后）
     if rows:
-        sheet.update(f"A2:I{1 + len(rows)}", rows)
+        end_row = 1 + len(rows)
+        sheet.update(rows, f'A2:I{end_row}', value_input_option='USER_ENTERED')
 
-    print(f"\nGoogle Sheet 已更新！共写入 {len(rows)} 条商品")
+    print(f'\nGoogle Sheet 已更新！共写入 {len(rows)} 条商品')
 
 
 def main():
     parser = argparse.ArgumentParser(description='tinanz.com → nzbaobao.com 同步工具')
     parser.add_argument('--category', type=str, default='1026', help='tinanz.com 分类ID (默认: 1026 成都现货)')
     parser.add_argument('--output', type=str, choices=['csv', 'sheet'], default='csv', help='输出方式')
-    parser.add_argument('--sheet-id', type=str, help='Google Sheet ID (output=sheet 时必填)')
-    parser.add_argument('--creds', type=str, default='service_account.json', help='Google Service Account 凭证路径')
+    parser.add_argument(
+        '--sheet-id', type=str,
+        help='Google Sheet ID（output=sheet 时必填，也可用环境变量 GOOGLE_SHEET_ID）')
+    parser.add_argument(
+        '--creds', type=str, default='service_account.json',
+        help='Service Account JSON 路径（未设置 GOOGLE_SERVICE_ACCOUNT_JSON 时使用）')
     parser.add_argument('--start-id', type=int, default=9, help='起始商品ID (默认9，避免覆盖内置1-8)')
     args = parser.parse_args()
 
@@ -271,10 +297,15 @@ def main():
         print(f"3. 文件 → 导入 → 上传 → 选择 {filename}")
         print("4. 导入位置: 替换当前表 (从A1开始) 或 替换现有数据")
     else:
-        if not args.sheet_id:
-            print("错误: --sheet-id 必填")
+        sheet_id = args.sheet_id or os.environ.get('GOOGLE_SHEET_ID', '').strip()
+        if not sheet_id:
+            print('错误: 请提供 --sheet-id 或环境变量 GOOGLE_SHEET_ID')
             return
-        update_google_sheet(rows, args.sheet_id, args.creds)
+        if not os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON', '').strip():
+            if not os.path.isfile(args.creds):
+                print(f'错误: 未找到凭证文件 {args.creds}，请设置 GOOGLE_SERVICE_ACCOUNT_JSON 或 --creds')
+                return
+        update_google_sheet(rows, sheet_id, args.creds)
 
 
 if __name__ == '__main__':
