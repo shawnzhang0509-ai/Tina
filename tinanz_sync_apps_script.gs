@@ -287,3 +287,13 @@ function logSyncResult_(when, status, message) {
   }
   sh.appendRow([when, status, message]);
 }
+
+// ----- 兼容：误删 Code.gs 里的 myFunction 时，旧触发器仍会报错；保留此桩 -----
+function myFunction() {
+  manualTinanzSync();
+}
+
+// ----- 常见拼写错误（下拉选错也能跑）-----
+function scheduledTinanSync() {
+  scheduledTinanzSync();
+}
